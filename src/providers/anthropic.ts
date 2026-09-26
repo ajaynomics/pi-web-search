@@ -16,6 +16,29 @@ import type { NativeSearchCallDetail, SearchResultDetail, StreamResult } from ".
 
 const CLAUDE_CODE_SYSTEM_PROMPT = "You are Claude Code, Anthropic's official CLI for Claude.";
 
+// Anthropic rejects OAuth requests from a claude-cli below the newest model's
+// floor ("Claude Code 2.1.251 does not support this model; version 2.1.280 or
+// newer is required"). Pi's own user-agent can lag that floor (pi 0.87.0 sends
+// 2.1.251), so a lower claude-cli version is raised rather than passed through.
+const CLAUDE_CLI_FLOOR = "2.1.280";
+
+function compareVersions(a: string, b: string): number {
+    const pa = a.split(".").map(Number);
+    const pb = b.split(".").map(Number);
+    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+        const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
+        if (diff !== 0) return diff;
+    }
+    return 0;
+}
+
+export function oauthUserAgent(current: string | undefined): string {
+    if (!current) return `claude-cli/${CLAUDE_CLI_FLOOR}`;
+    const match = /(^|\s)claude-cli\/(\d+\.\d+\.\d+)(?=\s|$)/.exec(current);
+    if (!match || compareVersions(match[2], CLAUDE_CLI_FLOOR) >= 0) return current;
+    return current.replace(`claude-cli/${match[2]}`, `claude-cli/${CLAUDE_CLI_FLOOR}`);
+}
+
 function resolveAnthropicMessagesUrl(baseUrl: string): string {
     const base = baseUrl.replace(/\/+$/, "");
     return base.endsWith("/v1") ? `${base}/messages` : `${base}/v1/messages`;
@@ -49,8 +72,10 @@ export async function callAnthropicStream(
             headers["anthropic-beta"] = headers["anthropic-beta"]
                 ? `${headers["anthropic-beta"]},claude-code-20250219,oauth-2025-04-20`
                 : "claude-code-20250219,oauth-2025-04-20";
-            // Anthropic rejects OAuth requests from anything older than 2.1.280 (pi 0.87.1 sends 2.1.280).
-            headers["user-agent"] = headers["user-agent"] || "claude-cli/2.1.280";
+            const uaKey = Object.keys(headers).find((key) => key.toLowerCase() === "user-agent");
+            const userAgent = oauthUserAgent(uaKey ? headers[uaKey] : undefined);
+            if (uaKey) delete headers[uaKey];
+            headers["user-agent"] = userAgent;
             headers["x-app"] = headers["x-app"] || "cli";
         } else if (!headers["x-api-key"] && !headers["X-Api-Key"]) {
             headers["x-api-key"] = auth.apiKey;

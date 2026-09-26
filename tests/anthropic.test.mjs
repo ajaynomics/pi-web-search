@@ -127,6 +127,29 @@ test('Anthropic stream sends the Claude Code system prompt for OAuth credentials
   assert.equal(result.text, 'OAuth accepted');
 });
 
+test('Anthropic OAuth raises a lagging claude-cli user-agent to the floor', async (t) => {
+  const seen = [];
+  t.mock.method(globalThis, 'fetch', async (_url, init) => {
+    seen.push(Object.entries(init.headers).filter(([key]) => key.toLowerCase() === 'user-agent'));
+    return makeResponse([
+      { data: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'ok' } } },
+    ]);
+  });
+
+  for (const headers of [{ 'user-agent': 'claude-cli/2.1.251' }, { 'User-Agent': 'claude-cli/2.1.251 (external, cli)' }, { 'user-agent': 'claude-cli/2.1.300' }]) {
+    await callApiStream(mockCtx('sk-ant-oat01-test'), {
+      id: 'claude-test', provider: 'anthropic', api: 'anthropic-messages',
+      baseUrl: 'https://example.test/anthropic', maxTokens: 4096, headers,
+    }, { contents: [{ parts: [{ text: 'Search' }] }] });
+  }
+
+  assert.deepEqual(seen, [
+    [['user-agent', 'claude-cli/2.1.280']],
+    [['user-agent', 'claude-cli/2.1.280 (external, cli)']],
+    [['user-agent', 'claude-cli/2.1.300']],
+  ]);
+});
+
 test('Anthropic stream omits the system prompt for API key credentials', async (t) => {
   t.mock.method(globalThis, 'fetch', async (_url, init) => {
     const body = JSON.parse(init.body);
